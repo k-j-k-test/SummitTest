@@ -34,6 +34,8 @@ namespace SummitActuary
         public StreamWriter ReserveWriter { get; set; }
         public StreamWriter StandardAgeWriter { get; set; }
 
+        public int a { get; set; } = 0;
+
         public PVPricing() 
         {
             PVCompiler = new PVCompiler();
