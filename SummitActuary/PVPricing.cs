@@ -35,6 +35,7 @@ namespace SummitActuary
         public StreamWriter StandardAgeWriter { get; set; }
 
         public int a { get; set; } = 0;
+        public int b { get; set; } = 0;
 
         public PVPricing() 
         {
