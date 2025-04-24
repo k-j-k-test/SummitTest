@@ -5,7 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 
-namespace SummitAct
+namespace SummitMain
 {
     class Program
     {
@@ -17,7 +17,9 @@ namespace SummitAct
 
             PVPricing pricing = new PVPricing();
 
-            pricing.모델포인트불러오기();
+            pricing.PV산출("60682");
+
+            pricing.S산출("60682");
         } 
     }
 

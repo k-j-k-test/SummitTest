@@ -31,7 +31,7 @@ namespace SummitActuary
 
             // Setup expression context
             context = new ExpressionContext();
-            context.Imports.AddType(typeof(FleeFunc));
+            context.Imports.AddType(typeof(DataExpanderFunctions));
             compiledExpressions = new Dictionary<string, IGenericExpression<object>>();
             InitializeContextVariables();
         }
@@ -408,10 +408,8 @@ namespace SummitActuary
         }
     }
 
-    public static class FleeFunc
+    public static class DataExpanderFunctions
     {
-        private static double epsilon = 0.0000000001;
-
         public static double Max(params double[] vals) => vals.Max();
 
         public static double Min(params double[] vals) => vals.Min();

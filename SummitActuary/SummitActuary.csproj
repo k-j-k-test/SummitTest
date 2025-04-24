@@ -63,7 +63,7 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="PVInfos.cs" />
+    <Compile Include="PVPricing.cs" />
     <Compile Include="DataExpander.cs" />
     <Compile Include="LTFStream.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />

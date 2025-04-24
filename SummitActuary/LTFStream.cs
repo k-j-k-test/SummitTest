@@ -29,7 +29,7 @@ namespace SummitActuary
         {
             FilePath = filePath;
             KeySelector = keySelector;
-            Encoding = Encoding.UTF8;
+            Encoding = Encoding.Default;
             Extension = Path.GetExtension(filePath);
             DetectLineEnding();
             DetectDelimiter();
@@ -750,6 +750,12 @@ namespace SummitActuary
 
         private void DetectDelimiter()
         {
+            if (!File.Exists(FilePath))
+            {
+                Delimiter = "\t"; 
+                return;
+            }
+
             var commonDelimiters = new[] { "\t", ",", "|", ";", "^" };
             var delimiterCounts = new Dictionary<string, int>();
 
@@ -788,6 +794,12 @@ namespace SummitActuary
 
         private void DetectLineEnding()
         {
+            if (!File.Exists(FilePath))
+            {
+                LineEnding = "\r\n";
+                return;
+            }
+
             using (StreamReader reader = new StreamReader(FilePath, Encoding))
             {
                 char[] buffer = new char[4096];
