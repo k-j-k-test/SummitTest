@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading.Tasks;
 
 namespace SummitMain
 {
@@ -11,16 +12,37 @@ namespace SummitMain
     {
         static void Main(string[] args)
         {
-            //UnitTest unitTest = new UnitTest();
-            //unitTest.UnitTestDirectory = @"C:\Users\wjdrh\OneDrive\Desktop\UnitTest";
-            //unitTest.IndexingTest();
+            RunMultiPVPricing();
+        }
 
+        static void RunSinglePVPricing()
+        {
             PVPricing pricing = new PVPricing();
 
-            pricing.PV산출("60682");
-
             pricing.S산출("60682");
-        } 
+            pricing.OutputFileSuffix = "1종";
+            pricing.PV산출("60682", jong: 1);
+            pricing.OutputFileSuffix = "2종";
+            pricing.PV산출("60682", jong: 2);
+        }
+
+        static void RunMultiPVPricing()
+        {
+            new PVPricing().S산출("60682");
+
+            Parallel.Invoke(
+                () => {
+                    var pricing1 = new PVPricing();
+                    pricing1.OutputFileSuffix = "1종";
+                    pricing1.PV산출("60682", jong: 1);
+                },
+                () => {
+                    var pricing2 = new PVPricing();
+                    pricing2.OutputFileSuffix = "2종";
+                    pricing2.PV산출("60682", jong: 2);
+                }
+            );
+        }
     }
 
     public class UnitTest

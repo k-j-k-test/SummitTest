@@ -6,46 +6,41 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text;
-using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Flee.PublicTypes;
 
 namespace SummitActuary
 {
-    public class PVPricing
+    public partial class PVPricing
     {
+        public PVInfo PVInfo { get; set; }
         public Dictionary<string, PVInfo> PVInfos { get; set; }
+
         public PVCompiler PVCompiler { get; set; }
         public VariableCollection Variables { get; set; }
         public DataExpander<ModelPointTable> DataExpander { get; set; }
 
         public List<string[]> MPs { get; set; }
-        public List<string[]> STDMPs { get; set; }
+        public ILookup<string, StandardAgeTable> StandardAgeLookup { get; set; }
         public ILookup<string, ProductTable> ProductLookup { get; set; }
         public ILookup<string, RiderTable> RiderLookup { get; set; }
         public ILookup<string, RiskRateTable> RiskRateLookup { get; set; }
         public ILookup<string, ExpenseTable> ExpneseLookup { get; set; }
-        public ILookup<string, StandardAgeTable> StandardAgeLookup { get; set; }
-
+ 
         public string InputDirectory = @"C:\Users\wjdrh\OneDrive\Desktop\Example1\Data";
         public string OutputDirectory = @"C:\Users\wjdrh\OneDrive\Desktop\Example1\Result";
+        public string OutputFileSuffix { get; set; } = "";
 
         public StreamWriter PremiumWriter { get; set; }
         public StreamWriter ReserveWriter { get; set; }
         public StreamWriter StandardAgeWriter { get; set; }
 
-        public int a { get; set; } = 0;
-        public int b { get; set; } = 0;
-
-        public PVPricing() 
+        public PVPricing()
         {
-            PVCompiler = new PVCompiler();
+            PVCompiler = new PVCompiler(this);
             Variables = PVCompiler.Context.Variables;
             DataExpander = new DataExpander<ModelPointTable>();
             PVInfos = new Dictionary<string, PVInfo>();
-            PVFunctions.PVPricing = this;
-            PVFunctions.Variables = Variables;
-            PVFunctions.PVInfos = PVInfos;
             SetVariables(new ModelPointTable());
         }
 
@@ -56,7 +51,7 @@ namespace SummitActuary
             담보정보불러오기();
             위험률불러오기();
             사업비불러오기();
-            기준연령불러오기();
+            기준연령불러오기_계산후();
 
             List<string[]> targetMPLines = MPs
                 .Where(arr => arr[0] == productCode)
@@ -67,8 +62,8 @@ namespace SummitActuary
             int count = 0;
             int total = targetMPLines.Count;
 
-            using (PremiumWriter = new StreamWriter(Path.Combine(OutputDirectory, "Premium_Result.txt"), default))
-            using (ReserveWriter = new StreamWriter(Path.Combine(OutputDirectory, "Reserve_Result.txt"), default))
+            using (PremiumWriter = new StreamWriter(Path.Combine(OutputDirectory, $"Premium_Result_{OutputFileSuffix}.txt"), default))
+            using (ReserveWriter = new StreamWriter(Path.Combine(OutputDirectory, $"Reserve_Result_{OutputFileSuffix}.txt"), default))
             {
                 PremiumWriter.WriteLine("ProductCode\tRiderCode\tJong\tx\tn\tm\tFreq\tSA\tF1\tF2\tF3\tF4\tF5\tF6\tF7\tF8\tF9\tS1\tS2\tS3\tS4\tS5\tS6\tS7\tS8\tS9\tNP12\tGP12");
                 ReserveWriter.WriteLine("ProductCode\tRiderCode\tJong\tx\tn\tm\tFreq\tSA\tF1\tF2\tF3\tF4\tF5\tF6\tF7\tF8\tF9\tS1\tS2\tS3\tS4\tS5\tS6\tS7\tS8\tS9\tV");
@@ -79,10 +74,10 @@ namespace SummitActuary
                     foreach (var mp in mps)
                     {
                         PVInfo계산(mp);
-                        PVInfo info = PVInfos[$"{mp.S2}|{mp.S3}|{mp.S5}"];
+                        PVInfo info = PVInfo;
 
-                        P산출_결과출력(info);
-                        V산출_결과출력(info);
+                        PremiumWriter.WriteLine(string.Join("\t", info.MP.ToString(), SA(info.NP[12]), SA(info.GP[12])));
+                        ReserveWriter.WriteLine(info.MP.ToString() + "\t" + string.Join("\t", info.V.Take(info.MP.n + 1)));
                     }
 
                     count++;
@@ -91,38 +86,35 @@ namespace SummitActuary
             }
         }
 
-        public void S산출(string productCode, string riderCode = "", int jong = 0)
+        public void S산출(string productCode, string riderCode = "")
         {
             모델포인트불러오기();
             상품정보불러오기();
             담보정보불러오기();
             위험률불러오기();
             사업비불러오기();
+            기준연령불러오기_계산전();
 
-            List<string[]> targetSTDMPLines = STDMPs
-                .Where(arr => arr[0] == productCode)
-                .Where(arr => arr[1] == riderCode || riderCode == "")
-                .Where(arr => arr[2] == jong.ToString() || jong == 0)
+            List<StandardAgeTable> targetStandardAges = StandardAgeLookup
+                .Where(k => k.Key.Split('|')[0] == productCode)
+                .Where(k => riderCode == "" || k.Key.Split('|')[1] == riderCode)
+                .SelectMany(k => k)
                 .ToList();
 
-            string standardAgeOutputPath = Path.Combine(OutputDirectory, "StandardAge_Result.txt");
-            LTFStream standardAgeStream = new LTFStream(standardAgeOutputPath);
-
-            using(StandardAgeWriter = new StreamWriter(standardAgeOutputPath, default))
+            using (StandardAgeWriter = new StreamWriter(Path.Combine(InputDirectory, "StandardAge_Calculated.txt"), default))
             {
-                StandardAgeWriter.WriteLine("ProductCode\tRiderCode\tJong\tx\tn\tm\tFreq\tSA\tF1\tF2\tF3\tF4\tF5\tF6\tF7\tF8\tF9\tS1\tS2\tS3\tS4\tS5\tS6\tS7\tS8\tS9\tNP_Term\tNP12\tSRatio\tGP12\tNP_STD\talpha_S\talpha_P\talpha_P2\talpha_P20\tALPHA12");
-
-                foreach (var mpLine in targetSTDMPLines)
+                foreach (StandardAgeTable line in targetStandardAges)
                 {
-                    List<ModelPointTable> mps = DataExpander.ExpandData(mpLine);
-                    foreach (var mp in mps)
-                    {
-                        PVInfo계산(mp);
-                        PVInfo info = PVInfos[$"{mp.S2}|{mp.S3}|{mp.S5}"];
-                        StandardAgeTable standardAge = 기준연령계산(info);
+                    ModelPointTable mp = line.ToModelPoint();                   
 
-                        S산출_결과출력(standardAge);
-                    }
+                    PVInfo계산(mp);
+                    PVInfo info = PVInfo;
+
+                    line.NP = info.NP[12];
+                    line.TermNP = 정기사망위험보험료계산(info);
+                    line.S = line.NP / line.TermNP;
+
+                    StandardAgeWriter.WriteLine(line.ToString());
                 }
             }
         }
@@ -134,10 +126,6 @@ namespace SummitActuary
 
             LTFStream stream = new LTFStream(path);
             MPs = stream.ReadAll().Select(line => line.Split('\t')).ToList();
-
-            string path2 = Path.Combine(InputDirectory, "MP_STD.txt");
-            LTFStream stream2 = new LTFStream(path2);
-            STDMPs = stream2.ReadAll().Select(line => line.Split('\t')).ToList();
         }
 
         public void 상품정보불러오기()
@@ -172,13 +160,30 @@ namespace SummitActuary
             ExpneseLookup = stream.ReadAll().Select(line => ToExpenseTable(line)).ToLookup(k => k.ProductCode + "|" + k.RiderCode + "|" + k.Jong);
         }
 
-        public void 기준연령불러오기()
+        public void 기준연령불러오기_계산전()
         {
+            string path = Path.Combine(InputDirectory, "StandardAge.txt");
 
+            if (File.Exists(path))
+            {
+                LTFStream stream = new LTFStream(path);
+                StandardAgeLookup = stream.ReadAll().Select(line => ToStandardAgeTable(line)).ToLookup(k => k.ProductCode + "|" + k.RiderCode + "|" + k.Jong);
+            }
+        }
+
+        public void 기준연령불러오기_계산후()
+        {
+            string path = Path.Combine(InputDirectory, "StandardAge_Calculated.txt");
+
+            if (File.Exists(path))
+            {
+                LTFStream stream = new LTFStream(path);
+                StandardAgeLookup = stream.ReadAll().Select(line => ToStandardAgeTable(line)).ToLookup(k => k.ProductCode + "|" + k.RiderCode + "|" + k.Jong);
+            }
         }
 
 
-        public virtual void 상품정보입력(PVInfo info)
+        public void 상품정보입력(PVInfo info)
         {
             string key1 = info.MP.ProductCode + "|" + info.MP.Jong;
             string key2 = info.MP.ProductCode + "|" + 0;
@@ -197,7 +202,7 @@ namespace SummitActuary
             }
         }
 
-        public virtual void 담보정보입력(PVInfo info)
+        public void 담보정보입력(PVInfo info)
         {
             string key1 = info.MP.ProductCode + "|" + info.MP.RiderCode + "|" + info.MP.Jong;
             string key2 = info.MP.ProductCode + "|" + info.MP.RiderCode + "|" + 0;
@@ -216,7 +221,7 @@ namespace SummitActuary
             }
         }
 
-        public virtual void 위험률입력(PVInfo info)
+        public void 위험률입력(PVInfo info)
         {
             info.RiskRates = new Dictionary<int, double[]>();
             foreach (var kpv in info.Rider.RiskRateNameMap)
@@ -229,7 +234,7 @@ namespace SummitActuary
             }
         }
 
-        public virtual void 사업비입력(PVInfo info)
+        public void 사업비입력(PVInfo info)
         {
             string key1 = info.MP.ProductCode + "|" + info.MP.RiderCode + "|" + info.MP.Jong;
             string key2 = info.MP.ProductCode + "|" + info.MP.RiderCode + "|" + 0;
@@ -285,7 +290,25 @@ namespace SummitActuary
             throw new Exception("사업비가 존재하지 않습니다. " + key1);
         }
 
-        public virtual void 기수표생성(PVInfo info)
+        public void MinS값입력(PVInfo info)
+        {
+            string key = info.MP.ProductCode + "|" + info.MP.RiderCode + "|" + info.MP.Jong;
+
+            if (StandardAgeLookup != null && StandardAgeLookup.Contains(key))
+            {
+                List<StandardAgeTable> standardAges = StandardAgeLookup[key]
+                    .Where(line => line.MinSGroup_Condition1.Evaluate() && line.MinSGroup_Condition2.Evaluate() && line.MinSGroup_Condition3.Evaluate())
+                    .ToList();
+
+                info.MinS = standardAges.Any() ? standardAges.Min(line => line.S) : 0;
+            }
+            else
+            {
+                info.MinS = 0;
+            }
+        }
+
+        public void 기수표생성(PVInfo info)
         {
             int x = info.MP.x;
             int n = info.MP.n;
@@ -294,9 +317,9 @@ namespace SummitActuary
             foreach (var kpv in info.Rider.Parameters_r) info.Rate_r[kpv.Key] = new double[PVInfo.END_AGE];
             foreach (var kpv in info.Rider.Parameters_k) info.Rate_k[kpv.Key] = new double[PVInfo.END_AGE];
             foreach (var kpv in info.Rider.Benefits) info.Benefit_Inforces[kpv.Key] = new double[PVInfo.END_AGE];
-            foreach (var kpv in info.Rider.Inforces) info.Survival_Inforces[kpv.Key] = new double[PVInfo.END_AGE];
+            foreach (var kpv in info.Rider.Inforces) info.Survivor_Inforces[kpv.Key] = new double[PVInfo.END_AGE];
             foreach (var kpv in info.Rider.Benefits_State) info.Benefit_States[kpv.Key] = new double[PVInfo.END_AGE];
-            foreach (var kpv in info.Rider.Inforces_State) info.Survival_States[kpv.Key] = new double[PVInfo.END_AGE];
+            foreach (var kpv in info.Rider.Inforces_State) info.Survivor_States[kpv.Key] = new double[PVInfo.END_AGE];
 
             for (int i = 0; i < n; i++)
             {
@@ -311,8 +334,8 @@ namespace SummitActuary
                 info.v_AccMid[i] = info.v_Acc[i] * Math.Pow(info.v[i], 0.5);
 
                 //Survival, Benefit
-                info.Survival_Inforce[i] = info.Rider.Inforce.Evaluate();
-                info.Survival_Payment[i] = info.Rider.Payment.Evaluate();
+                info.Survivor_Inforce[i] = info.Rider.Inforce.Evaluate();
+                info.Survivor_Payment[i] = info.Rider.Payment.Evaluate();
 
                 info.Benefit_Inforce[i] = info.Rider.Benefit_Inforce.Evaluate();
                 info.Benefit_Payment[i] = info.Rider.Benefit_Payment.Evaluate();
@@ -325,7 +348,7 @@ namespace SummitActuary
 
                 foreach (var kpv in info.Rider.Inforces)
                 {
-                    info.Survival_Inforces[kpv.Key][i] = kpv.Value.Evaluate();
+                    info.Survivor_Inforces[kpv.Key][i] = kpv.Value.Evaluate();
                 }
 
                 foreach (var kpv in info.Rider.Benefits_State)
@@ -335,18 +358,18 @@ namespace SummitActuary
 
                 foreach (var kpv in info.Rider.Inforces_State)
                 {
-                    info.Survival_States[kpv.Key][i] = kpv.Value.Evaluate();
+                    info.Survivor_States[kpv.Key][i] = kpv.Value.Evaluate();
                 }
             }
 
             //Lx
-            info.Lx_Inforce = Lx(info.Survival_Inforce, n);
-            info.Lx_Payment = Lx(info.Survival_Payment, n);
-            info.Lx_Waiver = Enumerable.Range(0, n + 1).Select(i => info.Survival_Inforce[i] - info.Survival_Payment[i]).ToArray();
+            info.Lx_Inforce = Lx(info.Survivor_Inforce, n);
+            info.Lx_Payment = Lx(info.Survivor_Payment, n);
+            info.Lx_Waiver = Enumerable.Range(0, n + 1).Select(i => info.Survivor_Inforce[i] - info.Survivor_Payment[i]).ToArray();
 
             foreach (var kpv in info.Rider.Inforces)
             {
-                info.Lx_Inforces[kpv.Key] = Lx(info.Survival_Inforces[kpv.Key], n);
+                info.Lx_Inforces[kpv.Key] = Lx(info.Survivor_Inforces[kpv.Key], n);
             }
 
             //Dx
@@ -359,7 +382,7 @@ namespace SummitActuary
                 info.Dx_Inforces[kpv.Key] = Dx(kpv.Value, info.v_Acc, n);
             }
 
-            //Nx
+            //Nx                                                                                                                                        
             info.Nx_Inforce = Nx(info.Dx_Inforce, n);
             info.Nx_Payment = Nx(info.Dx_Payment, n);
             info.Nx_Waiver = Nx(info.Dx_Waiver, n);
@@ -398,34 +421,21 @@ namespace SummitActuary
             }
         }
 
-        public virtual void 기수표생성_States(PVInfo info)
+        public virtual void 기수표추가생성(PVInfo info)
         {
             int x = info.MP.x;
             int n = info.MP.n;
             int m = info.MP.m;
 
-            //Withrwal, Benefit
-            //for (int i = n; i < 100; i++)
-            //{
-            //    SetVariables(info, i);
-
-            //    foreach (var kpv in info.Rider.Benefits_State)
-            //    {
-            //        if (info.Benefit_States[kpv.Key] == null) info.Benefit_States[kpv.Key] = new double[PVInfo.END_AGE];
-            //        info.Benefit_States[kpv.Key][i] = kpv.Value.Evaluate();
-            //    }
-
-            //    foreach (var kpv in info.Rider.Inforces_State)
-            //    {
-            //        if (info.Survival_States[kpv.Key] == null) info.Survival_States[kpv.Key] = new double[PVInfo.END_AGE];
-            //        info.Survival_States[kpv.Key][i] = kpv.Value.Evaluate();
-            //    }
-            //}
+            for (int i = 0; i < n; i++)
+            {
+                SetVariables(info, i);
+            }
 
             //Lx
             foreach (var kpv in info.Rider.Inforces_State)
             {
-                info.Lx_States[kpv.Key] = Lx(info.Survival_Inforces[kpv.Key], n);
+                info.Lx_States[kpv.Key] = Lx(info.Survivor_Inforces[kpv.Key], n);
             }
 
             //Dx
@@ -460,7 +470,7 @@ namespace SummitActuary
         public virtual void PVInfo계산(ModelPointTable mp)
         {
             HashSet<int> ss2 = new HashSet<int>() { 0, mp.S2 };
-            HashSet<int> ss3 = new HashSet<int>() { mp.S3, 0 };
+            HashSet<int> ss3 = new HashSet<int>() { 0, mp.S3 };
             HashSet<int> ss5 = new HashSet<int>() { 0, mp.S5 };
 
             foreach (int s2 in ss2)
@@ -470,18 +480,18 @@ namespace SummitActuary
                     foreach (int s5 in ss5)
                     {
                         PVInfo info = new PVInfo();
+                        PVInfo = info;
+                        PVInfos[$"{s2}|{s3}|{s5}"] = info;
+
                         ModelPointTable mp_temp = mp.Clone();
+                        info.MP = mp_temp;
 
                         mp_temp.S2 = s2;
                         mp_temp.S3 = s3;
                         mp_temp.S5 = s5;
 
-                        if (s3 == 1)
-                        {
-                            mp_temp.m = Math.Min(mp_temp.n, 20);
-                        }
-
-                        info.MP = mp_temp;
+                        if (ss3.Count == 2 && s3 == 0) mp_temp.m = Math.Min(mp_temp.n, 20);
+                        if (mp.S5 > 0 && s5 == 0) mp_temp.Jong = 1;
 
                         SetVariables(info.MP);
                         상품정보입력(info);
@@ -489,40 +499,20 @@ namespace SummitActuary
                         위험률입력(info);
                         사업비입력(info);
                         기수표생성(info);
-                        보험료계산(info);
-
-                        PVInfos[$"{s2}|{s3}|{s5}"] = info;
+                        요율계산(info);
+                        
                     }
                 }
             }
         }
 
-        public virtual StandardAgeTable 기준연령계산(PVInfo info)
-        {
-            StandardAgeTable standardAge = new StandardAgeTable();
-
-            standardAge.MP = info.MP;
-            standardAge.NP_Term = 정기사망위험보험료계산(info);
-            standardAge.NP12 = info.NP[12];
-            standardAge.SRatio = standardAge.NP12 / standardAge.NP_Term;
-            standardAge.GP12 = info.GP[12];
-            standardAge.NP_STD = info.NP_STD;
-            standardAge.alpha_S = info.Alpha_S;
-            standardAge.alpha_P = info.Alpha_P;
-            standardAge.alpha_P2 = info.Alpha_P2;
-            standardAge.alpha_P20 = info.Alpha_P20;
-            standardAge.ALPHA12 = info.ALPHA;
-            standardAge.STDALPHA = info.STDALPHA;
-
-            return standardAge;
-        }
-
-        public virtual void 보험료계산(PVInfo c)
+        public virtual void 요율계산(PVInfo c)
         {
             순보험료계산(c);
             영업보험료계산(c);
             베타순보험료계산(c);
             준비금계산(c);
+            환급금계산(c);
         }
 
         public virtual void 순보험료계산(PVInfo c)
@@ -546,7 +536,7 @@ namespace SummitActuary
             }
             else
             {
-
+                c.NP_STD = PVInfos[$"{c.MP.S2}|0|{c.MP.S5}"].NP[1];
             }
 
             //연납입횟수별 순보험료
@@ -683,18 +673,54 @@ namespace SummitActuary
             }
         }
 
-        public virtual void 해약환급금계산(PVInfo c)
+        public virtual void 환급금계산(PVInfo c)
         {
             int x = c.MP.x;
             int n = c.MP.n;
-            int m = c.MP.m;
+            int m = c.MP.m;          
             int freq = c.MP.Freq;
+            int stype = c.Rider.Stype.Evaluate();
+            int channel = c.Product.Channel;
+
+            int m_Min7 = Math.Min(m, 7);
+            int n_Min20 = Math.Min(n, 20);
+            MinS값입력(c);
 
             c.ALPHA = freq * c.Alpha_P * c.GP[freq] + c.Alpha_P20 * c.NP_STD + c.Alpha_S;
-            c.STDALPHA = Math.Min(n, 20) * c.NP_STD + 0.01 * c.MinS;
+
+            if (stype == 1)
+            {
+                c.STDALPHA = 0.05 * n_Min20 * c.NP_STD + 0.45 * c.NP_STD;
+            }
+            else if (stype == 2)
+            {
+                c.STDALPHA = 0.05 * n_Min20 * c.NP_STD + 0.01 * c.MinS;
+            }
+            else if (stype == 3)
+            {
+                c.STDALPHA = 0.05 * n_Min20 * c.NP_STD + 0.15 * c.NP_STD;
+            }
+            else
+            {
+                c.STDALPHA = 0;
+            }
+
+            if (channel == 1)
+            {
+                c.STDALPHA = 0.7 * c.STDALPHA;
+            }
 
             double ALPHA_Applied = Math.Min(c.ALPHA, c.STDALPHA);
 
+            for (int i = 0; i < 7; i++)
+            {
+                c.DAC[i] = ALPHA_Applied * (m_Min7 - i) / m_Min7;
+            }
+
+            for (int i = 0; i < n; i++)
+            {
+                c.W[i] = Math.Max(c.V[i] - c.DAC[i], 0);
+            }
         }
 
         public virtual double 정기사망위험보험료계산(PVInfo info)
@@ -717,127 +743,8 @@ namespace SummitActuary
             return NP_Term;
         }
 
-        public virtual void P산출_결과출력(PVInfo info)
-        {
-            StringBuilder sb = new StringBuilder();
-            sb.Append(info.MP.ProductCode).Append("\t");
-            sb.Append(info.MP.RiderCode).Append("\t");
-            sb.Append(info.MP.Jong).Append("\t");
-            sb.Append(info.MP.x).Append("\t");
-            sb.Append(info.MP.n).Append("\t");
-            sb.Append(info.MP.m).Append("\t");
-            sb.Append(info.MP.Freq).Append("\t");
-            sb.Append(info.MP.SA).Append("\t");
-            sb.Append(info.MP.F1).Append("\t");
-            sb.Append(info.MP.F2).Append("\t");
-            sb.Append(info.MP.F3).Append("\t");
-            sb.Append(info.MP.F4).Append("\t");
-            sb.Append(info.MP.F5).Append("\t");
-            sb.Append(info.MP.F6).Append("\t");
-            sb.Append(info.MP.F7).Append("\t");
-            sb.Append(info.MP.F8).Append("\t");
-            sb.Append(info.MP.F9).Append("\t");
-            sb.Append(info.MP.S1).Append("\t");
-            sb.Append(info.MP.S2).Append("\t");
-            sb.Append(info.MP.S3).Append("\t");
-            sb.Append(info.MP.S4).Append("\t");
-            sb.Append(info.MP.S5).Append("\t");
-            sb.Append(info.MP.S6).Append("\t");
-            sb.Append(info.MP.S7).Append("\t");
-            sb.Append(info.MP.S8).Append("\t");
-            sb.Append(info.MP.S9).Append("\t");
 
-            // 월납 순보험료와 영업보험료 추가
-            sb.Append(info.NP[12]).Append("\t");
-            sb.Append(info.GP[12]);
-
-            PremiumWriter.WriteLine(sb.ToString());
-        }
-
-        public virtual void V산출_결과출력(PVInfo info)
-        {
-            StringBuilder sb = new StringBuilder();
-            sb.Append(info.MP.ProductCode).Append("\t");
-            sb.Append(info.MP.RiderCode).Append("\t");
-            sb.Append(info.MP.Jong).Append("\t");
-            sb.Append(info.MP.x).Append("\t");
-            sb.Append(info.MP.n).Append("\t");
-            sb.Append(info.MP.m).Append("\t");
-            sb.Append(info.MP.Freq).Append("\t");
-            sb.Append(info.MP.SA).Append("\t");
-            sb.Append(info.MP.F1).Append("\t");
-            sb.Append(info.MP.F2).Append("\t");
-            sb.Append(info.MP.F3).Append("\t");
-            sb.Append(info.MP.F4).Append("\t");
-            sb.Append(info.MP.F5).Append("\t");
-            sb.Append(info.MP.F6).Append("\t");
-            sb.Append(info.MP.F7).Append("\t");
-            sb.Append(info.MP.F8).Append("\t");
-            sb.Append(info.MP.F9).Append("\t");
-            sb.Append(info.MP.S1).Append("\t");
-            sb.Append(info.MP.S2).Append("\t");
-            sb.Append(info.MP.S3).Append("\t");
-            sb.Append(info.MP.S4).Append("\t");
-            sb.Append(info.MP.S5).Append("\t");
-            sb.Append(info.MP.S6).Append("\t");
-            sb.Append(info.MP.S7).Append("\t");
-            sb.Append(info.MP.S8).Append("\t");
-            sb.Append(info.MP.S9);
-
-            // 보험기간 동안의 준비금(V) 값 추가
-            for (int i = 0; i < info.MP.n; i++)
-            {
-                sb.Append("\t").Append(info.V[i]);
-            }
-
-            ReserveWriter.WriteLine(sb.ToString());
-        }
-
-        public virtual void S산출_결과출력(StandardAgeTable standardAge)
-        {
-            StringBuilder sb = new StringBuilder();
-            sb.Append(standardAge.MP.ProductCode).Append("\t");
-            sb.Append(standardAge.MP.RiderCode).Append("\t");
-            sb.Append(standardAge.MP.Jong).Append("\t");
-            sb.Append(standardAge.MP.x).Append("\t");
-            sb.Append(standardAge.MP.n).Append("\t");
-            sb.Append(standardAge.MP.m).Append("\t");
-            sb.Append(standardAge.MP.Freq).Append("\t");
-            sb.Append(standardAge.MP.SA).Append("\t");
-            sb.Append(standardAge.MP.F1).Append("\t");
-            sb.Append(standardAge.MP.F2).Append("\t");
-            sb.Append(standardAge.MP.F3).Append("\t");
-            sb.Append(standardAge.MP.F4).Append("\t");
-            sb.Append(standardAge.MP.F5).Append("\t");
-            sb.Append(standardAge.MP.F6).Append("\t");
-            sb.Append(standardAge.MP.F7).Append("\t");
-            sb.Append(standardAge.MP.F8).Append("\t");
-            sb.Append(standardAge.MP.F9).Append("\t");
-            sb.Append(standardAge.MP.S1).Append("\t");
-            sb.Append(standardAge.MP.S2).Append("\t");
-            sb.Append(standardAge.MP.S3).Append("\t");
-            sb.Append(standardAge.MP.S4).Append("\t");
-            sb.Append(standardAge.MP.S5).Append("\t");
-            sb.Append(standardAge.MP.S6).Append("\t");
-            sb.Append(standardAge.MP.S7).Append("\t");
-            sb.Append(standardAge.MP.S8).Append("\t");
-            sb.Append(standardAge.MP.S9).Append("\t");
-            sb.Append(standardAge.NP_Term).Append("\t");
-            sb.Append(standardAge.NP12).Append("\t");
-            sb.Append(standardAge.SRatio).Append("\t");
-            sb.Append(standardAge.GP12).Append("\t");
-            sb.Append(standardAge.NP_STD).Append("\t");
-            sb.Append(standardAge.alpha_S).Append("\t");
-            sb.Append(standardAge.alpha_P).Append("\t");
-            sb.Append(standardAge.alpha_P2).Append("\t");
-            sb.Append(standardAge.alpha_P20).Append("\t");
-            sb.Append(standardAge.ALPHA12).Append("\t");
-            sb.Append(standardAge.STDALPHA);
-
-            StandardAgeWriter.WriteLine(sb.ToString());
-        }
-
-        public virtual double[] Lx(double[] survival, int n)
+        public double[] Lx(double[] survivor, int n)
         {
             double[] lx = new double[PVInfo.END_AGE];
 
@@ -849,14 +756,14 @@ namespace SummitActuary
                 }
                 else
                 {
-                    lx[i] = lx[i - 1] * survival[i - 1];
+                    lx[i] = lx[i - 1] * survivor[i - 1];
                 }
             }
 
             return lx;
         }
 
-        public virtual double[] Dx(double[] lx, double[] vAcc, int n)
+        public double[] Dx(double[] lx, double[] vAcc, int n)
         {
             double[] dx = new double[PVInfo.END_AGE];
             for (int i = 0; i < n; i++)
@@ -866,7 +773,7 @@ namespace SummitActuary
             return dx;
         }
 
-        public virtual double[] Nx(double[] dx, int n)
+        public double[] Nx(double[] dx, int n)
         {
             double[] nx = new double[PVInfo.END_AGE];
 
@@ -884,7 +791,7 @@ namespace SummitActuary
             return nx;
         }
 
-        public virtual double[] Cx(double[] lx, double[] vAccMid, double[] benefits, int n)
+        public double[] Cx(double[] lx, double[] vAccMid, double[] benefits, int n)
         {
             double[] cx = new double[PVInfo.END_AGE];
             for (int i = 0; i < n; i++)
@@ -894,7 +801,7 @@ namespace SummitActuary
             return cx;
         }
 
-        public virtual double[] Mx(double[] cx, int n)
+        public double[] Mx(double[] cx, int n)
         {
             double[] nx = new double[PVInfo.END_AGE];
 
@@ -912,7 +819,7 @@ namespace SummitActuary
             return nx;
         }
 
-        public virtual double NNx(double[] nx, double[] dx, int freq, int start, int end)
+        public double NNx(double[] nx, double[] dx, int freq, int start, int end)
         {
             switch (freq)
             {
@@ -927,11 +834,52 @@ namespace SummitActuary
             }
         }
 
-        public virtual double ax(double[] nx, double[] dx, int freq, int start, int end)
+        public double ax(double[] nx, double[] dx, int freq, int start, int end)
         {
             return NNx(nx, dx, freq, start, end) / dx[start];
         }
-        
+
+        public double SA(double value)
+        {
+            double SA = (double)Variables["SA"];
+            return Round(value * SA, 0);
+        }
+
+
+        public ModelPointTable ToModelPointTable(string line)
+        {
+            ModelPointTable mp = new ModelPointTable();
+            string[] arr = line.Split('\t');
+
+            mp.ProductCode = arr[0];
+            mp.RiderCode = arr[1];
+            mp.Jong = ToInt(arr[2]);
+            mp.x = ToInt(arr[3]);
+            mp.n = ToInt(arr[4]);
+            mp.m = ToInt(arr[5]);
+            mp.Freq = ToInt(arr[6]);
+            mp.SA = ToDouble(arr[7]);
+            mp.F1 = ToInt(arr[8]);
+            mp.F2 = ToInt(arr[9]);
+            mp.F3 = ToInt(arr[10]);
+            mp.F4 = ToInt(arr[11]);
+            mp.F5 = ToInt(arr[12]);
+            mp.F6 = ToInt(arr[13]);
+            mp.F7 = ToInt(arr[14]);
+            mp.F8 = ToInt(arr[15]);
+            mp.F9 = ToInt(arr[16]);
+            mp.S1 = ToInt(arr[17]);
+            mp.S2 = ToInt(arr[18]);
+            mp.S3 = ToInt(arr[19]);
+            mp.S4 = ToInt(arr[20]);
+            mp.S5 = ToInt(arr[21]);
+            mp.S6 = ToInt(arr[22]);
+            mp.S7 = ToInt(arr[23]);
+            mp.S8 = ToInt(arr[24]);
+            mp.S9 = ToInt(arr[25]);
+
+            return mp;
+        }
 
         public ProductTable ToProductTable(string line)
         {
@@ -945,7 +893,7 @@ namespace SummitActuary
             r.i = PVCompiler.CompileDouble(arr[4]);
             r.ii = PVCompiler.CompileDouble(arr[5]);
             r.w = PVCompiler.CompileDouble(arr[6]);
-            r.Channel = PVCompiler.CompileInt(arr[7]);
+            r.Channel = ToInt(arr[7]);
 
             return r;
         }
@@ -1006,7 +954,6 @@ namespace SummitActuary
             return r;
         }
 
-
         public RiskRateTable ToRiskRateTable(string line)
         {
             RiskRateTable r = new RiskRateTable();
@@ -1066,54 +1013,46 @@ namespace SummitActuary
         public StandardAgeTable ToStandardAgeTable(string line)
         {
             StandardAgeTable r = new StandardAgeTable();
-            ModelPointTable mp = new ModelPointTable();
-
             string[] arr = line.Split('\t');
 
-            mp.ProductCode = arr[0];
-            mp.RiderCode = arr[1];
-            mp.Jong = ToInt(arr[2]);
-            mp.x = ToInt(arr[3]);
-            mp.n = ToInt(arr[4]);
-            mp.m = ToInt(arr[5]);
-            mp.Freq = ToInt(arr[6]);
-            mp.SA = ToDouble(arr[7]);
-            mp.F1 = ToInt(arr[8]);
-            mp.F2 = ToInt(arr[9]);
-            mp.F3 = ToInt(arr[10]);
-            mp.F4 = ToInt(arr[11]);
-            mp.F5 = ToInt(arr[12]);
-            mp.F6 = ToInt(arr[13]);
-            mp.F7 = ToInt(arr[14]);
-            mp.F8 = ToInt(arr[15]);
-            mp.F9 = ToInt(arr[16]);
-            mp.S1 = ToInt(arr[17]);
-            mp.S2 = ToInt(arr[18]);
-            mp.S3 = ToInt(arr[19]);
-            mp.S4 = ToInt(arr[20]);
-            mp.S5 = ToInt(arr[21]);
-            mp.S6 = ToInt(arr[22]);
-            mp.S7 = ToInt(arr[23]);
-            mp.S8 = ToInt(arr[24]);
-            mp.S9 = ToInt(arr[25]);
-            mp.MinSGroup_Condition = arr[26];
+            r.ProductCode = arr[0];
+            r.RiderCode = arr[1];
+            r.Jong = ToInt(arr[2]);
+            r.x = ToInt(arr[3]);
+            r.n = ToInt(arr[4]);
+            r.m = ToInt(arr[5]);
+            r.Freq = ToInt(arr[6]);
+            r.SA = ToDouble(arr[7]);
+            r.F1 = ToInt(arr[8]);
+            r.F2 = ToInt(arr[9]);
+            r.F3 = ToInt(arr[10]);
+            r.F4 = ToInt(arr[11]);
+            r.F5 = ToInt(arr[12]);
+            r.F6 = ToInt(arr[13]);
+            r.F7 = ToInt(arr[14]);
+            r.F8 = ToInt(arr[15]);
+            r.F9 = ToInt(arr[16]);
+            r.S1 = ToInt(arr[17]);   
+            r.S2 = ToInt(arr[18]);
+            r.S3 = ToInt(arr[19]);
+            r.S4 = ToInt(arr[20]);
+            r.S5 = ToInt(arr[21]);
+            r.S6 = ToInt(arr[22]);
+            r.S7 = ToInt(arr[23]);
+            r.S8 = ToInt(arr[24]);
+            r.S9 = ToInt(arr[25]);
 
-            r.MP = mp;
-            r.MinSGroup_Condition = PVCompiler.CompileBool(arr[27]);
-            r.NP_Term = ToDouble(arr[28]);
-            r.NP12 = ToDouble(arr[29]);
-            r.SRatio = ToDouble(arr[30]);
-            r.GP12 = ToDouble(arr[31]);
-            r.NP_STD = ToDouble(arr[32]);
-            r.alpha_S = ToDouble(arr[33]);
-            r.alpha_P = ToDouble(arr[34]);
-            r.alpha_P2 = ToDouble(arr[35]);
-            r.alpha_P20 = ToDouble(arr[36]);
-            r.ALPHA12 = ToDouble(arr[37]);
-            r.STDALPHA = ToDouble(arr[38]);
+            r.MinSGroup_Condition1 = PVCompiler.CompileBool(arr[26]);
+            r.MinSGroup_Condition2 = PVCompiler.CompileBool(arr[27]);
+            r.MinSGroup_Condition3 = PVCompiler.CompileBool(arr[28]);
+
+            r.NP = ToDouble(arr[29]);
+            r.TermNP = ToDouble(arr[30]);
+            r.S = ToDouble(arr[31]);
 
             return r;
         }
+
 
         public void SetVariables(ModelPointTable mp)
         {
@@ -1208,6 +1147,7 @@ namespace SummitActuary
                     if (offset == 2) idx = i;
                     adjustedRates[i] = riskrate.RiskRates[idx] / Face;
                 }
+
                 return adjustedRates;
             }
 
@@ -1286,11 +1226,11 @@ namespace SummitActuary
         public Dictionary<int, double[]> Benefit_States = new Dictionary<int, double[]>();
 
         //Withrwal Rate
-        public double[] Survival_Inforce = new double[END_AGE];
-        public double[] Survival_Payment = new double[END_AGE];
-        public double[] Survival_Waiver = new double[END_AGE];
-        public Dictionary<int, double[]> Survival_Inforces = new Dictionary<int, double[]>();
-        public Dictionary<int, double[]> Survival_States = new Dictionary<int, double[]>();
+        public double[] Survivor_Inforce = new double[END_AGE];
+        public double[] Survivor_Payment = new double[END_AGE];
+        public double[] Survivor_Waiver = new double[END_AGE];
+        public Dictionary<int, double[]> Survivor_Inforces = new Dictionary<int, double[]>();
+        public Dictionary<int, double[]> Survivor_States = new Dictionary<int, double[]>();
 
         //Lx
         public double[] Lx_Inforce = new double[END_AGE];
@@ -1349,383 +1289,4 @@ namespace SummitActuary
         public double MinS;
     }
 
-    public class PVCompiler
-    {
-        public ExpressionContext Context { get; private set; }
-
-        private Dictionary<(Type, string), object> exprSet = new Dictionary<(Type, string), object>();
-
-        public PVCompiler()
-        {
-            Context = new ExpressionContext();
-            Context.Imports.AddType(typeof(PVFunctions));
-        }
-
-        public IGenericExpression<int> CompileInt(string exprStr)
-        {
-            if (string.IsNullOrWhiteSpace(exprStr)) exprStr = "0";
-
-            if (exprSet.ContainsKey((typeof(int), exprStr)))
-            {
-                return (IGenericExpression<int>)exprSet[(typeof(int), exprStr)];
-            }
-            else
-            {
-                try
-                {
-                    exprSet[(typeof(int), exprStr)] = Context.CompileGeneric<int>(exprStr);
-                    return (IGenericExpression<int>)exprSet[(typeof(int), exprStr)];
-                }
-                catch
-                {
-                    throw new Exception("적용 할 수 없는 수식 발견:" + exprStr);
-                }
-            }
-        }
-
-        public IGenericExpression<bool> CompileBool(string exprStr)
-        {
-            if (string.IsNullOrWhiteSpace(exprStr)) exprStr = "true";
-
-            if (exprSet.ContainsKey((typeof(bool), exprStr)))
-            {
-                return (IGenericExpression<bool>)exprSet[(typeof(bool), exprStr)];
-            }
-            else
-            {
-                try
-                {
-                    exprSet[(typeof(bool), exprStr)] = Context.CompileGeneric<bool>(exprStr);
-                    return (IGenericExpression<bool>)exprSet[(typeof(bool), exprStr)];
-                }
-                catch
-                {
-                    throw new Exception("적용 할 수 없는 수식 발견:" + exprStr);
-                }
-            }
-        }
-
-        public IGenericExpression<double> CompileDouble(string exprStr)
-        {
-            if (string.IsNullOrWhiteSpace(exprStr)) exprStr = "0";
-            if (exprStr == "∞" || exprStr == "NaN") exprStr = "0";
-
-            if (exprSet.ContainsKey((typeof(double), exprStr)))
-            {
-                return (IGenericExpression<double>)exprSet[(typeof(double), exprStr)];
-            }
-            else
-            {
-                try
-                {
-                    exprSet[(typeof(double), exprStr)] = Context.CompileGeneric<double>(exprStr);
-                    return (IGenericExpression<double>)exprSet[(typeof(double), exprStr)];
-                }
-                catch
-                {
-                    throw new Exception("적용 할 수 없는 수식 발견:" + exprStr);
-                }
-            }
-        }
-
-        public IGenericExpression<string> CompileString(string exprStr)
-        {
-            if (string.IsNullOrWhiteSpace(exprStr)) exprStr = @""""""; //""
-
-            if (exprSet.ContainsKey((typeof(string), exprStr)))
-            {
-                return (IGenericExpression<string>)exprSet[(typeof(string), exprStr)];
-            }
-            else
-            {
-                try
-                {
-                    exprSet[(typeof(string), exprStr)] = Context.CompileGeneric<string>(exprStr);
-                    return (IGenericExpression<string>)exprSet[(typeof(string), exprStr)];
-                }
-                catch
-                {
-                    throw new Exception("적용 할 수 없는 수식 발견:" + exprStr);
-                }
-            }
-        }     
-    }
-
-    public static class PVFunctions
-    {
-        public static PVPricing PVPricing { get; set; }
-
-        public static PVInfo PVInfo { get { return PVInfos[$"{Variables["S2"]}|{Variables["S3"]}|{Variables["S5"]}"]; } }
-
-        public static Dictionary<string, PVInfo> PVInfos { get; set; }
-
-        public static VariableCollection Variables { get; set; }
-
-        public static double D(params double[] items)
-        {
-            int t = (int)Variables["t"];
-            int S1 = (int)Variables["S1"];
-
-            if (S1 > 0 || t >= items.Length)
-            {
-                return 1.0;
-            }
-            else
-            {
-                return items[t];
-            }
-        }
-
-        public static double U(params double[] items)
-        {
-            int t = (int)Variables["t"];
-            int x = (int)Variables["x"];
-            int S1 = (int)Variables["S1"];
-
-            if (S1 > 0 || x + t < 15 || t >= items.Length)
-            {
-                return 1.0;
-            }
-            else
-            {
-                return items[t];
-            }
-        }
-
-        public static double Round(double value, int decimals)
-        {
-            double preRounded = Math.Round(value, 12);
-            double factor = Math.Pow(10, decimals);
-            return Math.Round(preRounded * factor) / factor;
-        }
-
-        public static double RoundDown(double value, int decimals)
-        {
-            double preRounded = Math.Round(value, 12);
-            double factor = Math.Pow(10, decimals);
-            return Math.Floor(preRounded * factor) / factor;
-        }
-
-        public static double RoundUp(double value, int decimals)
-        {
-            double preRounded = Math.Round(value, 12);
-            double factor = Math.Pow(10, decimals);
-            return Math.Ceiling(preRounded * factor) / factor;
-        }
-
-        public static double RoundA(double number)
-        {
-            double SA = (double)Variables["SA"];
-
-            return Round(number * SA, 0) / SA;
-        }
-
-        public static double Min(params double[] values)
-        {
-            return values.Min();
-        }
-
-        public static double Max(params double[] values)
-        {
-            return values.Max();
-        }
-
-        public static int Min(params int[] values)
-        {
-            return values.Min();
-        } 
-
-        public static int Max(params int[] values)
-        {
-            return values.Max();
-        }
-
-        public static double FindQ(string rateName, int t)
-        {
-            if (!PVPricing.RiskRateLookup.Contains(rateName))
-            {
-                throw new Exception("위험률이 존재하지 않습니다. " + rateName);
-            }
-
-            foreach (RiskRateTable riskrate in PVPricing.RiskRateLookup[rateName])
-            {
-                if (riskrate.F1 != null && PVInfo.MP.F1 != riskrate.F1.Value) continue;
-                if (riskrate.F2 != null && PVInfo.MP.F2 != riskrate.F2.Value) continue;
-                if (riskrate.F3 != null && PVInfo.MP.F3 != riskrate.F3.Value) continue;
-                if (riskrate.F4 != null && PVInfo.MP.F4 != riskrate.F4.Value) continue;
-                if (riskrate.F5 != null && PVInfo.MP.F5 != riskrate.F5.Value) continue;
-                if (riskrate.F6 != null && PVInfo.MP.F6 != riskrate.F6.Value) continue;
-                if (riskrate.F7 != null && PVInfo.MP.F7 != riskrate.F7.Value) continue;
-                if (riskrate.F8 != null && PVInfo.MP.F8 != riskrate.F8.Value) continue;
-                if (riskrate.F9 != null && PVInfo.MP.F9 != riskrate.F9.Value) continue;
-
-                return riskrate.RiskRates[t] / riskrate.Face;
-            }
-
-            throw new Exception("조건에 맞는 위험률을 찾을 수 없습니다. " + rateName);
-        }
-
-
-        public static double V(int t)
-        {
-            int S2 = (int)Variables["S2"];
-            int S3 = (int)Variables["S3"];
-            int S5 = (int)Variables["S5"];
-
-            if (S5 == 0) return 0;
-            string key = string.Join("|", S2, S3, 0);
-            return PVInfos[key].V[t];
-        }
-
-        public static double W(int t)
-        {
-            int S2 = (int)Variables["S2"];
-            int S3 = (int)Variables["S3"];
-            int S5 = (int)Variables["S5"];
-
-            if (S5 == 0) return 0;
-            string key = string.Join("|", S2, S3, 0);
-            return PVInfos[key].W[t];
-        }
-
-    }
-
-    //Tables
-    public class ProductTable
-    {
-        public string ProductCode { get; set; }
-        public int Jong { get; set; }
-        public string ProductName { get; set; }
-        public string Date { get; set; }
-        public IGenericExpression<double> i { get; set; }
-        public IGenericExpression<double> ii { get; set; }
-        public IGenericExpression<double> w { get; set; }
-        public IGenericExpression<int> Channel { get; set; }
-    }
-
-    public class RiderTable
-    {
-        public string ProductCode { get; set; }
-        public string RiderCode { get; set; }
-        public int Jong { get; set; }
-        public string RiderName { get; set; }
-        public IGenericExpression<int> PVType { get; set; }
-        public IGenericExpression<int> Stype { get; set; }
-
-        public IGenericExpression<double> Inforce { get; set; }
-        public IGenericExpression<double> Payment { get; set; }
-        public Dictionary<int, IGenericExpression<double>> Benefits { get; set; } = new Dictionary<int, IGenericExpression<double>>();
-        public Dictionary<int, IGenericExpression<double>> Inforces { get; set; } = new Dictionary<int, IGenericExpression<double>>();
-        public IGenericExpression<double> Benefit_Inforce { get; set; }
-        public IGenericExpression<double> Benefit_Payment { get; set; }
-        public IGenericExpression<double> Benefit_Waiver { get; set; }
-        public Dictionary<int, IGenericExpression<double>> Benefits_State { get; set; } = new Dictionary<int, IGenericExpression<double>>();
-        public Dictionary<int, IGenericExpression<double>> Inforces_State { get; set; } = new Dictionary<int, IGenericExpression<double>>();
-
-        public Dictionary<int, string> RiskRateNameMap { get; set; } = new Dictionary<int, string>();
-
-        public Dictionary<int, IGenericExpression<double>> Parameters_r { get; set; } = new Dictionary<int, IGenericExpression<double>>();
-        public Dictionary<int, IGenericExpression<double>> Parameters_k { get; set; } = new Dictionary<int, IGenericExpression<double>>();
-    }
-
-    public class ModelPointTable
-    {
-        public string ProductCode { get; set; }
-        public string RiderCode { get; set; }
-        public int Jong { get; set; }
-        public int x { get; set; }
-        public int n { get; set; }
-        public int m { get; set; }
-        public int Freq { get; set; }
-        public double SA { get; set; }
-        public int F1 { get; set; }
-        public int F2 { get; set; }
-        public int F3 { get; set; }
-        public int F4 { get; set; }
-        public int F5 { get; set; }
-        public int F6 { get; set; }
-        public int F7 { get; set; }
-        public int F8 { get; set; }
-        public int F9 { get; set; }
-        public int S1 { get; set; }
-        public int S2 { get; set; }
-        public int S3 { get; set; }
-        public int S4 { get; set; }
-        public int S5 { get; set; }
-        public int S6 { get; set; }
-        public int S7 { get; set; }
-        public int S8 { get; set; }
-        public int S9 { get; set; }
-        public string MinSGroup_Condition { get; set; }
-
-        public ModelPointTable Clone()
-        {
-            return (ModelPointTable)this.MemberwiseClone();
-        }
-    }
-
-    public class RiskRateTable
-    {
-        public string RiskRateName { get; set; }
-        public Nullable<int> F1 { get; set; }
-        public Nullable<int> F2 { get; set; }
-        public Nullable<int> F3 { get; set; }
-        public Nullable<int> F4 { get; set; }
-        public Nullable<int> F5 { get; set; }
-        public Nullable<int> F6 { get; set; }
-        public Nullable<int> F7 { get; set; }
-        public Nullable<int> F8 { get; set; }
-        public Nullable<int> F9 { get; set; }
-
-        public string Date { get; set; }
-        public double Face { get; set; }
-        public IGenericExpression<int> Offset { get; set; }
-        public double[] RiskRates { get; set; }
-    }
-
-    public class ExpenseTable
-    {
-        public string ProductCode { get; set; }
-        public string RiderCode { get; set; }
-        public int Jong { get; set; }
-        public IGenericExpression<bool> Condition1 { get; set; }
-        public IGenericExpression<bool> Condition2 { get; set; }
-        public IGenericExpression<bool> Condition3 { get; set; }
-        public IGenericExpression<bool> Condition4 { get; set; }
-        public IGenericExpression<double> Alpha_S { get; set; }
-        public IGenericExpression<double> Alpha_P { get; set; }
-        public IGenericExpression<double> Alpha_P2 { get; set; }
-        public IGenericExpression<double> Alpha_P20 { get; set; }
-        public IGenericExpression<double> Beta_S { get; set; }
-        public IGenericExpression<double> Beta_P { get; set; }
-        public IGenericExpression<double> Betaprime_S { get; set; }
-        public IGenericExpression<double> Betaprime_P { get; set; }
-        public IGenericExpression<double> Gamma { get; set; }
-        public IGenericExpression<double> Ce { get; set; }
-        public IGenericExpression<double> Refund_P { get; set; }
-        public IGenericExpression<double> Refund_S { get; set; }
-        public IGenericExpression<double> Exp_etc1 { get; set; }
-        public IGenericExpression<double> Exp_etc2 { get; set; }
-        public IGenericExpression<double> Exp_etc3 { get; set; }
-        public IGenericExpression<double> Exp_etc4 { get; set; }
-    }
-
-    public class StandardAgeTable
-    {
-        public ModelPointTable MP { get; set; }
-        public IGenericExpression<bool> MinSGroup_Condition { get; set; }
-
-        public double NP_Term { get; set; }
-        public double NP12 { get; set; }
-        public double SRatio { get; set; }
-
-        public double GP12 { get; set; }
-        public double NP_STD { get; set; }
-        public double alpha_S { get; set; }
-        public double alpha_P { get; set; }
-        public double alpha_P2 { get; set; }
-        public double alpha_P20 { get; set; }
-        public double ALPHA12 { get; set; }
-        public double STDALPHA { get; set; }
-    }
 }
